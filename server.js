@@ -13,7 +13,7 @@ const client = new Client({
   user: "postgres",
   port: 5432,
   password: "ResPsql987",
-  database: "postgres",
+  database: "squareup",
 });
 
 client.connect();
@@ -84,15 +84,18 @@ app.post("/", async (req, res) => {
           itemData.variations && itemData.variations.length > 0
             ? itemData.variations[0].item_variation_data.price_money.amount /
               100
-            : null, 
-        modifier_groups: JSON.stringify(item.item_data.modifier_list_info), 
-        categories: JSON.stringify(item.item_data.categories), 
+            : null,
+        modifier_groups: JSON.stringify(item.item_data.modifier_list_info),
+        categories: JSON.stringify(item.item_data.categories),
         modifier_name: null,
         modifier_price: null,
         updated_at: item.updated_at,
       };
     });
-    console.log(items, "items")
+    for (const item of items) {
+      await updateItemIfNewer(item);
+    }
+    // console.log(items, "items");
 
     // Insert items into the database
     if (isEmpty) {
@@ -230,6 +233,53 @@ const insertItemToDb = async (item) => {
   await client.query(query);
   console.log(item, "insertItemToDb");
   // Insert item into the database
+};
+
+const updateItemIfNewer = async (item) => {
+  // Fetch the current item from the database
+  const {
+    rows: [currentItem],
+  } = await client.query("SELECT * FROM squareup WHERE item_id = $1", [
+    item.item_id,
+  ]);
+
+  // If the item exists and the API's updated_at is more recent, update the item
+  if (
+    currentItem &&
+    new Date(item.updated_at) > new Date(currentItem.updated_at)
+  ) {
+    const updateQuery = {
+      text: `
+         UPDATE squareup SET
+           variant_id = $1,
+           name = $2,
+           variant_name = $3,
+           attributes = $4,
+           price = $5,
+           modifier_groups = $6,
+           categories = $7,
+           modifier_name = $8,
+           modifier_price = $9,
+           updated_at = $10
+         WHERE item_id = $11
+       `,
+      values: [
+        item.variant_id,
+        item.name,
+        item.variant_name,
+        item.attributes,
+        item.price,
+        item.modifier_groups,
+        item.categories,
+        item.modifier_name,
+        item.modifier_price,
+        item.updated_at,
+        item.item_id,
+      ],
+    };
+    await client.query(updateQuery);
+    console.log(`Item updated: ${item.item_id}`);
+  }
 };
 
 // Function to delete a single item from the database
