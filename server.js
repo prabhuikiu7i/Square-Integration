@@ -7,13 +7,15 @@ const app = express();
 const port = 8080;
 
 const ITEM_DETAILS = "https://connect.squareup.com/v2/catalog/list?types=ITEM";
+const MODIFIER_DETAILS =
+  "https://connect.squareup.com/v2/catalog/list?types=MODIFIER_LIST";
 
 const client = new Client({
-  host: "127.0.0.1",
+  host: "localhost",
   user: "postgres",
   port: 5432,
-  password: "ResPsql987",
-  database: "squareup",
+  password: "baseline77",
+  database: "postgres",
 });
 
 client.connect();
@@ -50,6 +52,46 @@ const createTableIfNotExists = async () => {
   } catch (error) {
     console.error("Error creating table:", error.message);
   }
+
+  const createModifiersTableQuery = `
+     CREATE TABLE IF NOT EXISTS modifiers (
+      item_id  VARCHAR(255),
+      item_name VARCHAR(255),
+      modifier_group_id VARCHAR(255),
+      modifier_group_name VARCHAR(255),
+      modifier_name VARCHAR(255),
+      modifier_price VARCHAR(255),
+      modifier_id VARCHAR(255)
+    );
+  `;
+  try {
+    await client.query(createModifiersTableQuery);
+    console.log("Modifiers table created successfully");
+  } catch (error) {
+    console.error("Error creating modifiers table:", error.message);
+  }
+
+  // Create variants table if not exists
+  const createVariantsTableQuery = `
+     CREATE TABLE IF NOT EXISTS variants (
+      item_id  VARCHAR(255),
+      variant_id VARCHAR(255),
+      name VARCHAR(255),
+      variant_name VARCHAR(255),
+      attributes VARCHAR(255),
+      price VARCHAR(255),
+      modifier_groups VARCHAR(255),
+      categories VARCHAR(255),
+      modifier_name VARCHAR(255),
+      modifier_price VARCHAR(255)
+    );
+  `;
+  try {
+    await client.query(createVariantsTableQuery);
+    console.log("Variants table created successfully");
+  } catch (error) {
+    console.error("Error creating variants table:", error.message);
+  }
 };
 
 app.post("/", async (req, res) => {
@@ -60,6 +102,8 @@ app.post("/", async (req, res) => {
     console.log("isEmpty: ", isEmpty);
 
     const itemsResponse = await getData(ITEM_DETAILS);
+    const modifierResponse = await getData(MODIFIER_DETAILS);
+    // console.log("modifierResponse: ", modifierResponse);
     const items = itemsResponse.objects.map((item) => {
       const itemData = item.item_data;
       const itemVariation = item.item_data.variations;
@@ -92,10 +136,10 @@ app.post("/", async (req, res) => {
         updated_at: item.updated_at,
       };
     });
+
     for (const item of items) {
       await updateItemIfNewer(item);
     }
-    // console.log(items, "items");
 
     // Insert items into the database
     if (isEmpty) {
@@ -172,7 +216,8 @@ app.post("/", async (req, res) => {
 });
 app.get("/data", async (req, res) => {
   const items = await getData(ITEM_DETAILS);
-  res.status(200).json({ message: items });
+  const modifierItems = await getData(MODIFIER_DETAILS);
+  res.status(200).json({ message: modifierItems });
 });
 
 // Function to check if the database is empty
