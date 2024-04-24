@@ -11,11 +11,11 @@ const MODIFIER_DETAILS =
   "https://connect.squareup.com/v2/catalog/list?types=MODIFIER_LIST";
 
 const client = new Client({
-  host: "localhost",
+  host: "127.0.0.1",
   user: "postgres",
   port: 5432,
-  password: "baseline77",
-  database: "postgres",
+  password: "ResPsql987",
+  database: "squareup",
 });
 
 client.connect();
