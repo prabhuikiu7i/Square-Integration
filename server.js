@@ -107,6 +107,8 @@ app.post("/", async (req, res) => {
     const items = itemsResponse.objects.map((item) => {
       const itemData = item.item_data;
       const itemVariation = item.item_data.variations;
+      itemName = itemData.name;
+      itemId = item.id;
 
       return {
         item_id: item.id,
@@ -127,7 +129,7 @@ app.post("/", async (req, res) => {
         price:
           itemData.variations && itemData.variations.length > 0
             ? itemData.variations[0].item_variation_data.price_money.amount /
-              100
+            100
             : null,
         modifier_groups: JSON.stringify(item.item_data.modifier_list_info),
         categories: JSON.stringify(item.item_data.categories),
@@ -137,8 +139,91 @@ app.post("/", async (req, res) => {
       };
     });
 
+    const modifierItem = modifierResponse.objects.map((modifier) => {
+      const modifierData = modifier.modifier_list_data || modifier.modifier_data;
+      let modifierPrice = null;
+
+      if (modifierData.price_money && modifierData.price_money.amount) {
+        modifierPrice = modifierData.price_money.amount;
+      }
+      if (modifierData.modifiers) {
+        // If it's a MULTIPLE selection type modifier
+        return modifierData.modifiers.map(mod => ({
+          modifier_group_id: modifier.id,
+          modifier_group_name: modifierData.name,
+          modifier_name: mod.modifier_data.name,
+          modifier_price: mod.modifier_data.price_money.amount ? mod.modifier_data.price_money.amount / 100 : null,
+          modifier_id: mod.id,
+        }));
+      }
+      else {
+        // If it's a SINGLE selection type modifier
+        return {
+          modifier_group_id: modifier.id,
+          modifier_group_name: modifierData.name,
+          modifier_name: modifierData.name,
+          modifier_price: modifierPrice,
+          modifier_id: modifierData.id || modifier.id,
+        };
+      }
+    }).flat();
+
+    // const extractedModifiers = extractModifiers(modifierResponse);
+    // console.log(extractedModifiers);
+    const updateModifiers = async (id, name, modifier_groups, modifiersData) => {
+      if (modifier_groups?.length > 0) {
+        if (!Array.isArray(modifier_groups)) {
+          modifier_groups = JSON.parse(modifier_groups);
+        }
+
+        // Iterate through modifier groups
+        for (const modifier_group of modifier_groups) {
+          const modifier_list_id = modifier_group.modifier_list_id;
+
+          const matchingModifiers = modifiersData.filter(modifier => modifier.modifier_group_id === modifier_list_id);
+          console.log('matchingModifiers: ', matchingModifiers);
+
+          // If matching modifiers found, perform insert or update
+          if (matchingModifiers.length > 0) {
+            for (const modifier of matchingModifiers) {
+              const { modifier_group_id, modifier_group_name, modifier_name, modifier_price, modifier_id } = modifier;
+
+              try {
+                // Check if modifier exists
+                const modifierExistsQuery = 'SELECT COUNT(*) FROM modifiers WHERE modifier_id = $1';
+                const modifierExistsValues = [modifier_id];
+                const modifierExistsResult = await client.query(modifierExistsQuery, modifierExistsValues);
+
+                const modifierExists = parseInt(modifierExistsResult.rows[0].count) > 0;
+
+                if (modifierExists) {
+                  // Update existing modifier
+                  const updateModifierQuery = `UPDATE modifiers 
+                                           SET item_name = $1, modifier_group_name = $2, modifier_name = $3, modifier_price = $4 
+                                           WHERE modifier_id = $5`;
+                  const updateModifierValues = [name, modifier_group_name, modifier_name, modifier_price, modifier_id];
+                  await client.query(updateModifierQuery, updateModifierValues);
+                } else {
+                  // Insert new modifier
+                  const insertModifierQuery = `INSERT INTO modifiers (item_id, item_name, modifier_group_id, modifier_group_name, modifier_name, modifier_price, modifier_id) 
+                                           VALUES ($1, $2, $3, $4, $5, $6, $7)`;
+                  const insertModifierValues = [id, name, modifier_group_id, modifier_group_name, modifier_name, modifier_price, modifier_id];
+                  await client.query(insertModifierQuery, insertModifierValues);
+                }
+              } catch (error) {
+                console.error('Error inserting/updating modifier:', error);
+              }
+            }
+          } else {
+            console.log('No matching modifiers found for modifier_list_id:', modifier_list_id);
+          }
+        }
+      }
+    };
+
     for (const item of items) {
       await updateItemIfNewer(item);
+      updateModifiers(item.item_id, item.name, item.modifier_groups, modifierItem)
     }
 
     // Insert items into the database
@@ -208,6 +293,7 @@ app.post("/", async (req, res) => {
     // Delete items from the database
     for (const itemId of missingInApi) {
       await deleteItemFromDb(itemId);
+      await deleteModifierFromDb(itemId);
     }
   } catch (error) {
     console.error("Error:", error.message);
@@ -217,14 +303,40 @@ app.post("/", async (req, res) => {
 app.get("/data", async (req, res) => {
   const items = await getData(ITEM_DETAILS);
   const modifierItems = await getData(MODIFIER_DETAILS);
-  res.status(200).json({ message: modifierItems });
+
+  // Construct the response object
+  const response = {
+    items: items,
+    modifierItems: modifierItems
+  };
+
+  res.status(200).json(response);
 });
+
 
 // Function to check if the database is empty
 const isDatabaseEmpty = async () => {
   const result = await client.query("SELECT EXISTS (SELECT 1 FROM squareup)");
   return !result.rows[0].exists;
 };
+
+async function extractModifiers(modifierResponse) {
+  const modifierObjects = modifierResponse.objects;
+  // console.log(modifierObjects)
+
+  const extractedModifiers = modifierObjects.map(modifier => {
+    const modifierData = modifier.modifier_list_data || modifier.modifier_data;
+    return {
+      modifier_group_id: modifier.id,
+      modifier_group_name: modifierData.name,
+      modifier_name: modifierData.name,
+      modifier_price: modifierData.price_money ? modifierData.price_money.amount : null,
+      modifier_id: modifierData.id || modifier.id
+    };
+  });
+
+  return extractedModifiers;
+}
 
 // Function to fetch data from Square API
 const getData = async (url) => {
@@ -334,6 +446,14 @@ const deleteItemFromDb = async (itemId) => {
   };
   await client.query(deleteItemQuery);
   console.log("deleteItemFromDb: ", itemId);
+};
+
+const deleteModifierFromDb = async (itemId) => {
+  const deleteItemQuery = {
+    text: `DELETE FROM modifiers WHERE item_id = '${itemId}'`,
+  };
+  await client.query(deleteItemQuery);
+  console.log("deleteModifierFromDb: ", itemId);
 };
 
 app.listen(port, () => {
